@@ -1,0 +1,174 @@
+name: IIS Container Deploy
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: Application name used for GHCR and production deploy
+        required: true
+        type: string
+
+      container-port:
+        description: Port exposed by the container
+        required: false
+        type: number
+        default: 80
+
+      smoke-path:
+        description: HTTP path used for the local smoke test
+        required: true
+        type: string
+
+      deploy-branch:
+        description: Branch allowed to deploy to production
+        required: false
+        type: string
+        default: main
+
+      containerfile:
+        description: Containerfile path
+        required: false
+        type: string
+        default: Containerfile
+
+      smoke-timeout:
+        description: Maximum seconds to wait for the local smoke test
+        required: false
+        type: number
+        default: 30
+
+jobs:
+  container:
+    runs-on: [self-hosted, Linux, X64, ipsos-devops-01, opensuse, podman]
+
+    concurrency:
+      group: iis-deploy-${{ github.repository }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Prepare build variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+
+          echo "APP=${{ inputs.app }}" >> "$GITHUB_ENV"
+          echo "IMAGE_REPO=ghcr.io/${owner}/${{ inputs.app }}" >> "$GITHUB_ENV"
+          echo "LOCAL_IMAGE=localhost/${{ inputs.app }}-ci:${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "CI_CONTAINER=${{ inputs.app }}-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Build container
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          podman build \
+            -f "${{ inputs.containerfile }}" \
+            -t "$LOCAL_IMAGE" \
+            .
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          podman rm -f "$CI_CONTAINER" >/dev/null 2>&1 || true
+
+          cleanup() {
+            podman rm -f "$CI_CONTAINER" >/dev/null 2>&1 || true
+          }
+
+          trap cleanup EXIT
+
+          podman run \
+            -d \
+            --name "$CI_CONTAINER" \
+            -p "127.0.0.1::${{ inputs.container-port }}" \
+            "$LOCAL_IMAGE"
+
+          mapping="$(podman port "$CI_CONTAINER" "${{ inputs.container-port }}/tcp")"
+          host_port="${mapping##*:}"
+
+          if [[ -z "$host_port" ]]; then
+            echo "Could not determine smoke-test host port" >&2
+            exit 1
+          fi
+
+          ready=0
+
+          for ((attempt = 1; attempt <= ${{ inputs.smoke-timeout }}; attempt++)); do
+            if curl \
+              --fail \
+              --silent \
+              --show-error \
+              "http://127.0.0.1:${host_port}${{ inputs.smoke-path }}" \
+              >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+
+            sleep 1
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            echo "Container did not become ready within ${{ inputs.smoke-timeout }} seconds" >&2
+            podman logs "$CI_CONTAINER" || true
+            exit 1
+          fi
+
+          echo "Container smoke test passed"
+
+      - name: Login to GHCR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            podman login ghcr.io \
+              --username "${{ github.actor }}" \
+              --password-stdin
+
+      - name: Publish SHA image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          podman tag \
+            "$LOCAL_IMAGE" \
+            "${IMAGE_REPO}:${GITHUB_SHA}"
+
+          podman push \
+            "${IMAGE_REPO}:${GITHUB_SHA}"
+
+          echo "Published ${IMAGE_REPO}:${GITHUB_SHA}"
+
+      - name: Deploy production
+        if: github.ref_name == inputs.deploy-branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ssh ipsos-apps-01 \
+            "sudo -n /usr/local/bin/iis-deploy '${APP}' '${GITHUB_SHA}'"
+
+          podman tag \
+            "$LOCAL_IMAGE" \
+            "${IMAGE_REPO}:main"
+
+          podman push \
+            "${IMAGE_REPO}:main"
+
+          echo "Production deploy OK: ${APP} ${GITHUB_SHA}"
+
+      - name: Cleanup runner
+        if: always()
+        shell: bash
+        run: |
+          podman rm -f "$CI_CONTAINER" >/dev/null 2>&1 || true
+          podman rmi "$LOCAL_IMAGE" >/dev/null 2>&1 || true
+          podman rmi "${IMAGE_REPO}:${GITHUB_SHA}" >/dev/null 2>&1 || true
+          podman rmi "${IMAGE_REPO}:main" >/dev/null 2>&1 || true
