@@ -164,11 +164,8 @@ jobs:
 
           echo "Production deploy OK: ${APP} ${GITHUB_SHA}"
 
-      - name: Cleanup runner
+      - name: Cleanup test container
         if: always()
         shell: bash
         run: |
           podman rm -f "$CI_CONTAINER" >/dev/null 2>&1 || true
-          podman rmi "$LOCAL_IMAGE" >/dev/null 2>&1 || true
-          podman rmi "${IMAGE_REPO}:${GITHUB_SHA}" >/dev/null 2>&1 || true
-          podman rmi "${IMAGE_REPO}:main" >/dev/null 2>&1 || true
