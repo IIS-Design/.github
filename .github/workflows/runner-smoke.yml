@@ -1,0 +1,47 @@
+name: Self-hosted runner smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, Linux, X64, ipsos-devops-01, opensuse, podman]
+
+    steps:
+      - name: Show runner identity
+        run: |
+          echo "Hostname: $(hostname)"
+          echo "User: $(whoami)"
+          id
+          uname -a
+
+      - name: Test rootless Podman
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+          podman info --format 'rootless={{.Host.Security.Rootless}} cgroup={{.Host.CgroupsVersion}} manager={{.Host.CgroupManager}}'
+
+          podman run --rm docker.io/library/alpine:3.22 \
+            sh -c 'echo "Container: OK"; uname -m'
+
+      - name: Test image build
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+          WORKDIR="$(mktemp -d)"
+          cd "$WORKDIR"
+
+          cat > Containerfile <<'CONTAINERFILE'
+          FROM docker.io/library/alpine:3.22
+          RUN adduser -D -u 10001 appuser
+          USER appuser
+          CMD ["sh", "-c", "echo 'Build: OK'; id"]
+          CONTAINERFILE
+
+          podman build -t localhost/ci-smoke:${GITHUB_SHA} .
+          podman run --rm localhost/ci-smoke:${GITHUB_SHA}
+          podman rmi localhost/ci-smoke:${GITHUB_SHA}
+
+          rm -rf "$WORKDIR"
