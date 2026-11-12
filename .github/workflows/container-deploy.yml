@@ -185,7 +185,7 @@ jobs:
           echo "Published ${IMAGE_REPO}:main"
 
       - name: Deploy to Coolify (pilot)
-        if: github.ref_name == inputs.deploy-branch && (inputs.app == 'ui-library' || inputs.app == 'core' || inputs.deploy-coolify)
+        if: github.ref_name == inputs.deploy-branch && (inputs.app == 'ui-library' || inputs.app == 'core' || inputs.app == 'isay-experience' || inputs.deploy-coolify)
         continue-on-error: true
         shell: bash
         run: |
