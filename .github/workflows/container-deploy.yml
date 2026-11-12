@@ -37,6 +37,18 @@ on:
         type: number
         default: 30
 
+      deploy-vm115:
+        description: Deploy to legacy VM 115
+        required: false
+        type: boolean
+        default: true
+
+      deploy-coolify:
+        description: Deploy to Coolify
+        required: false
+        type: boolean
+        default: false
+
 jobs:
   container:
     runs-on: [self-hosted, Linux, X64, ipsos-devops-01, opensuse, podman]
@@ -146,14 +158,22 @@ jobs:
 
           echo "Published ${IMAGE_REPO}:${GITHUB_SHA}"
 
-      - name: Deploy production
-        if: github.ref_name == inputs.deploy-branch
+      - name: Deploy production (VM 115)
+        if: github.ref_name == inputs.deploy-branch && inputs.deploy-vm115
         shell: bash
         run: |
           set -euo pipefail
 
           ssh ipsos-apps-01 \
             "sudo -n /usr/local/bin/iis-deploy '${APP}' '${GITHUB_SHA}'"
+
+          echo "Production deploy OK: ${APP} ${GITHUB_SHA}"
+
+      - name: Publish main image
+        if: github.ref_name == inputs.deploy-branch
+        shell: bash
+        run: |
+          set -euo pipefail
 
           podman tag \
             "$LOCAL_IMAGE" \
@@ -162,10 +182,10 @@ jobs:
           podman push \
             "${IMAGE_REPO}:main"
 
-          echo "Production deploy OK: ${APP} ${GITHUB_SHA}"
-      
+          echo "Published ${IMAGE_REPO}:main"
+
       - name: Deploy to Coolify (pilot)
-        if: github.ref_name == inputs.deploy-branch && (inputs.app == 'ui-library' || inputs.app == 'core')
+        if: github.ref_name == inputs.deploy-branch && (inputs.app == 'ui-library' || inputs.app == 'core' || inputs.deploy-coolify)
         continue-on-error: true
         shell: bash
         run: |
