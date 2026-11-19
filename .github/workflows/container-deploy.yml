@@ -39,10 +39,10 @@ on:
         default: 30
 
       deploy-vm115:
-        description: Deploy to legacy VM 115
+        description: Deprecated compatibility input; ignored
         required: false
         type: boolean
-        default: true
+        default: false
 
       deploy-coolify:
         description: Deploy to Coolify
@@ -159,17 +159,6 @@ jobs:
 
           echo "Published ${IMAGE_REPO}:${GITHUB_SHA}"
 
-      - name: Deploy production (VM 115)
-        if: github.ref_name == inputs.deploy-branch && inputs.deploy-vm115
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ssh ipsos-apps-01 \
-            "sudo -n /usr/local/bin/iis-deploy '${APP}' '${GITHUB_SHA}'"
-
-          echo "Production deploy OK: ${APP} ${GITHUB_SHA}"
-
       - name: Publish main image
         if: github.ref_name == inputs.deploy-branch
         shell: bash
@@ -185,7 +174,7 @@ jobs:
 
           echo "Published ${IMAGE_REPO}:main"
 
-      - name: Deploy to Coolify (pilot)
+      - name: Deploy to Coolify
         if: >-
           github.ref_name == inputs.deploy-branch &&
           (
@@ -195,7 +184,6 @@ jobs:
               inputs.app
             )
           )
-        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
